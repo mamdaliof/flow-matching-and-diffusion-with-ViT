@@ -96,6 +96,12 @@ def get_args_parser():
         help="Dataset to use.",
     )
     parser.add_argument(
+        "--image_size",
+        default=None,
+        type=int,
+        help="Image size for training. Required for ImageNet with DiT (e.g., 64 or 32). CIFAR-10 uses 32 by default.",
+    )
+    parser.add_argument(
         "--data_path",
         default="./data/image_generation",
         type=str,

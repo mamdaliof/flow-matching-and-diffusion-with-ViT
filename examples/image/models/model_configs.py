@@ -88,21 +88,20 @@ MODEL_CONFIGS = {
 }
 
 # DiT model configurations for different datasets
+# Note: input_size should match the image size used during training
 DIT_MODEL_CONFIGS = {
     "imagenet": {
-        "input_size": 32,  # For 256x256 images with 8x downsampling from VAE
-        "patch_size": 2,
+        "input_size": 64,  # For 64x64 resized images (can use 32 for faster training)
         "in_channels": 3,
         "num_classes": 1000,
-        "class_dropout_prob": 0.1,
+        "class_dropout_prob": 0.1,  # Model-level dropout for classifier-free guidance
         "learn_sigma": False,
     },
     "cifar10": {
         "input_size": 32,  # CIFAR-10 is 32x32
-        "patch_size": 2,
         "in_channels": 3,
-        "num_classes": 10,
-        "class_dropout_prob": 0.0,  # No class conditioning for CIFAR-10
+        "num_classes": 10,  # CIFAR-10 has 10 classes
+        "class_dropout_prob": 0.1,  # Model-level dropout for classifier-free guidance
         "learn_sigma": False,
     },
 }
@@ -115,6 +114,7 @@ def instantiate_model(
     model_type: str = "unet",
     dit_model: str = "DiT-S/2",
     class_dropout_prob: float = None,
+    image_size: int = None,
 ) -> Union[UNetModel, DiscreteUNetModel, DiTFlowMatching]:
     """
     Instantiate a model for flow matching training.
@@ -126,6 +126,7 @@ def instantiate_model(
         model_type: Model type - 'unet' or 'vit' (DiT)
         dit_model: DiT model variant (e.g., 'DiT-S/2', 'DiT-B/2', etc.)
         class_dropout_prob: Override class dropout probability for classifier-free guidance
+        image_size: Image size for DiT models (must match training data size)
     """
     if model_type == "vit":
         assert not is_discrete, "DiT/ViT models do not support discrete flow matching yet."
@@ -147,6 +148,10 @@ def instantiate_model(
         # Override class dropout if specified
         if class_dropout_prob is not None:
             config["class_dropout_prob"] = class_dropout_prob
+        
+        # Override input_size if specified
+        if image_size is not None:
+            config["input_size"] = image_size
             
         # Remove patch_size from config as it's set by the model variant
         config.pop("patch_size", None)

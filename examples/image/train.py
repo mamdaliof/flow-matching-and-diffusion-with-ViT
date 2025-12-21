@@ -56,8 +56,17 @@ def main(args):
 
     cudnn.benchmark = True
 
+    # Determine image size for DiT models
+    image_size = args.image_size
+    if args.model_type == "vit" and image_size is None:
+        if args.dataset == "cifar10":
+            image_size = 32
+        else:
+            image_size = 64  # Default for ImageNet with DiT
+            logger.warning(f"Using default image_size={image_size} for DiT. Consider setting --image_size explicitly.")
+
     logger.info(f"Initializing Dataset: {args.dataset}")
-    transform_train = get_train_transform()
+    transform_train = get_train_transform(image_size=image_size if args.model_type == "vit" else None)
     if args.dataset == "imagenet":
         dataset_train = datasets.ImageFolder(args.data_path, transform=transform_train)
     elif args.dataset == "cifar10":
@@ -97,6 +106,7 @@ def main(args):
         model_type=args.model_type,
         dit_model=args.dit_model,
         class_dropout_prob=args.class_drop_prob,
+        image_size=image_size,
     )
 
     model.to(device)
