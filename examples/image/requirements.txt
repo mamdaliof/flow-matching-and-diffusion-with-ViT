@@ -3,3 +3,4 @@ torchmetrics[image]
 torchvision
 timm
 torchdiffeq
+tqdm

@@ -15,13 +15,13 @@ from flow_matching.path.scheduler import PolynomialConvexScheduler
 from models.ema import EMA
 from torch.nn.parallel import DistributedDataParallel
 from torchmetrics.aggregation import MeanMetric
+from tqdm import tqdm
 from training.grad_scaler import NativeScalerWithGradNormCount
 from training import distributed_mode
 
 logger = logging.getLogger(__name__)
 
 MASK_TOKEN = 256
-PRINT_FREQUENCY = 50
 
 
 def skewed_timestep_sample(num_samples: int, device: torch.device) -> torch.Tensor:
@@ -56,7 +56,13 @@ def train_one_epoch(
     else:
         path = CondOTProbPath()
 
-    for data_iter_step, (samples, labels) in enumerate(data_loader):
+    # Use tqdm progress bar only on main process
+    if distributed_mode.is_main_process():
+        pbar = tqdm(enumerate(data_loader), total=len(data_loader), desc=f"Epoch {epoch}")
+    else:
+        pbar = enumerate(data_loader)
+
+    for data_iter_step, (samples, labels) in pbar:
         if data_iter_step % accum_iter == 0:
             optimizer.zero_grad()
             batch_loss.reset()
@@ -128,11 +134,10 @@ def train_one_epoch(
         ):
             model.module.update_ema()
 
-        lr = optimizer.param_groups[0]["lr"]
-        if data_iter_step % PRINT_FREQUENCY == 0 and distributed_mode.is_main_process():
-            logger.info(
-                f"Epoch {epoch} [{data_iter_step}/{len(data_loader)}]: loss = {batch_loss.compute()}, lr = {lr}"
-            )
+        # Update tqdm progress bar with loss and lr
+        if distributed_mode.is_main_process():
+            lr = optimizer.param_groups[0]["lr"]
+            pbar.set_postfix({"loss": f"{loss_value:.4f}", "lr": f"{lr:.2e}"})
 
     lr_schedule.step()
     return {"loss": float(epoch_loss.compute().detach().cpu())}
