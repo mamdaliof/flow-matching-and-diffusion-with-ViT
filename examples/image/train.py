@@ -11,7 +11,13 @@ import logging
 import os
 import sys
 import time
+import warnings
 from pathlib import Path
+
+# Suppress NumPy 2.4 deprecation warning from torchvision CIFAR dataset loading
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="torchvision.datasets.cifar")
+# Suppress PyTorch pin_memory deprecation warning
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="torch.utils.data._utils.pin_memory")
 
 import numpy as np
 import torch
@@ -112,7 +118,9 @@ def main(args):
     model.to(device)
 
     model_without_ddp = model
-    logger.info(str(model_without_ddp))
+    # Log model parameter count instead of full architecture
+    num_params = sum(p.numel() for p in model_without_ddp.parameters())
+    logger.info(f"Model parameters: {num_params:,}")
 
     eff_batch_size = (
         args.batch_size * args.accum_iter * distributed_mode.get_world_size()
