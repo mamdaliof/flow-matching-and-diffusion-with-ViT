@@ -8,6 +8,7 @@ from typing import Union
 from models.discrete_unet import DiscreteUNetModel
 from models.ema import EMA
 from models.unet import UNetModel
+from models.vit import DiT_FM_models, DiTFlowMatching
 
 MODEL_CONFIGS = {
     "imagenet": {
@@ -86,25 +87,88 @@ MODEL_CONFIGS = {
     },
 }
 
+# DiT model configurations for different datasets
+DIT_MODEL_CONFIGS = {
+    "imagenet": {
+        "input_size": 32,  # For 256x256 images with 8x downsampling from VAE
+        "patch_size": 2,
+        "in_channels": 3,
+        "num_classes": 1000,
+        "class_dropout_prob": 0.1,
+        "learn_sigma": False,
+    },
+    "cifar10": {
+        "input_size": 32,  # CIFAR-10 is 32x32
+        "patch_size": 2,
+        "in_channels": 3,
+        "num_classes": 10,
+        "class_dropout_prob": 0.0,  # No class conditioning for CIFAR-10
+        "learn_sigma": False,
+    },
+}
+
 
 def instantiate_model(
-    architechture: str, is_discrete: bool, use_ema: bool
-) -> Union[UNetModel, DiscreteUNetModel]:
-    assert (
-        architechture in MODEL_CONFIGS
-    ), f"Model architecture {architechture} is missing its config."
-
-    if is_discrete:
-        if architechture + "_discrete" in MODEL_CONFIGS:
-            config = MODEL_CONFIGS[architechture + "_discrete"]
+    architechture: str, 
+    is_discrete: bool, 
+    use_ema: bool,
+    model_type: str = "unet",
+    dit_model: str = "DiT-S/2",
+    class_dropout_prob: float = None,
+) -> Union[UNetModel, DiscreteUNetModel, DiTFlowMatching]:
+    """
+    Instantiate a model for flow matching training.
+    
+    Args:
+        architechture: Dataset name (imagenet, cifar10)
+        is_discrete: Whether to use discrete flow matching
+        use_ema: Whether to wrap model with EMA
+        model_type: Model type - 'unet' or 'vit' (DiT)
+        dit_model: DiT model variant (e.g., 'DiT-S/2', 'DiT-B/2', etc.)
+        class_dropout_prob: Override class dropout probability for classifier-free guidance
+    """
+    if model_type == "vit":
+        assert not is_discrete, "DiT/ViT models do not support discrete flow matching yet."
+        assert dit_model in DiT_FM_models, f"Unknown DiT model: {dit_model}. Available: {list(DiT_FM_models.keys())}"
+        
+        # Get base config for the dataset
+        if architechture in DIT_MODEL_CONFIGS:
+            config = DIT_MODEL_CONFIGS[architechture].copy()
         else:
-            config = MODEL_CONFIGS[architechture]
-        model = DiscreteUNetModel(
-            vocab_size=257,
-            **config,
-        )
+            # Default config
+            config = {
+                "input_size": 32,
+                "in_channels": 3,
+                "num_classes": 1000,
+                "class_dropout_prob": 0.1,
+                "learn_sigma": False,
+            }
+        
+        # Override class dropout if specified
+        if class_dropout_prob is not None:
+            config["class_dropout_prob"] = class_dropout_prob
+            
+        # Remove patch_size from config as it's set by the model variant
+        config.pop("patch_size", None)
+        
+        model = DiT_FM_models[dit_model](**config)
     else:
-        model = UNetModel(**MODEL_CONFIGS[architechture])
+        # Original UNet logic
+        assert (
+            architechture in MODEL_CONFIGS
+        ), f"Model architecture {architechture} is missing its config."
+
+        if is_discrete:
+            if architechture + "_discrete" in MODEL_CONFIGS:
+                config = MODEL_CONFIGS[architechture + "_discrete"]
+            else:
+                config = MODEL_CONFIGS[architechture]
+            model = DiscreteUNetModel(
+                vocab_size=257,
+                **config,
+            )
+        else:
+            model = UNetModel(**MODEL_CONFIGS[architechture])
 
     if use_ema:
         return EMA(model=model)

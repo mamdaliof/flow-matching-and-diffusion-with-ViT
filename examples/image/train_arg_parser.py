@@ -8,6 +8,7 @@ import json
 import logging
 
 from models.model_configs import MODEL_CONFIGS
+from models.vit import DiT_FM_models
 from torchdiffeq._impl.odeint import SOLVERS
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,22 @@ def get_args_parser():
         default=1,
         type=int,
         help="Accumulate gradient iterations (for increasing the effective batch size under memory constraints)",
+    )
+
+    # Model architecture parameters
+    parser.add_argument(
+        "--model_type",
+        default="unet",
+        type=str,
+        choices=["unet", "vit"],
+        help="Model architecture type: 'unet' for UNet or 'vit' for DiT (Vision Transformer).",
+    )
+    parser.add_argument(
+        "--dit_model",
+        default="DiT-S/2",
+        type=str,
+        choices=list(DiT_FM_models.keys()),
+        help="DiT model variant to use when model_type='vit'. Options: DiT-{S,B,L,XL}/{2,4,8}",
     )
 
     # Optimizer parameters

@@ -89,11 +89,14 @@ def main(args):
     logger.info(str(sampler_train))
 
     # define the model
-    logger.info("Initializing Model")
+    logger.info(f"Initializing Model (type={args.model_type})")
     model = instantiate_model(
         architechture=args.dataset,
         is_discrete=args.discrete_flow_matching,
         use_ema=args.use_ema,
+        model_type=args.model_type,
+        dit_model=args.dit_model,
+        class_dropout_prob=args.class_drop_prob,
     )
 
     model.to(device)
