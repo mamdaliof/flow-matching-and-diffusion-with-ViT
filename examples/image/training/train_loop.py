@@ -16,6 +16,7 @@ from models.ema import EMA
 from torch.nn.parallel import DistributedDataParallel
 from torchmetrics.aggregation import MeanMetric
 from training.grad_scaler import NativeScalerWithGradNormCount
+from training import distributed_mode
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,7 @@ def train_one_epoch(
             model.module.update_ema()
 
         lr = optimizer.param_groups[0]["lr"]
-        if data_iter_step % PRINT_FREQUENCY == 0:
+        if data_iter_step % PRINT_FREQUENCY == 0 and distributed_mode.is_main_process():
             logger.info(
                 f"Epoch {epoch} [{data_iter_step}/{len(data_loader)}]: loss = {batch_loss.compute()}, lr = {lr}"
             )

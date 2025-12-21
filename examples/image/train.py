@@ -37,13 +37,19 @@ logger = logging.getLogger(__name__)
 
 
 def main(args):
-    logging.basicConfig(
-        level=logging.INFO,
-        stream=sys.stdout,
-        format="%(asctime)s %(levelname)-8s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
     distributed_mode.init_distributed_mode(args)
+    
+    # Only configure logging for main process
+    if distributed_mode.is_main_process():
+        logging.basicConfig(
+            level=logging.INFO,
+            stream=sys.stdout,
+            format="%(asctime)s %(levelname)-8s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    else:
+        # Disable logging for non-main processes
+        logging.basicConfig(level=logging.WARNING)
 
     logger.info("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
     logger.info("{}".format(args).replace(", ", ",\n"))
