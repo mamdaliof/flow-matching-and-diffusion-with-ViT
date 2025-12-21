@@ -7,6 +7,7 @@ import argparse
 import gc
 import logging
 import math
+import sys
 from typing import Iterable
 
 import torch
@@ -58,7 +59,13 @@ def train_one_epoch(
 
     # Use tqdm progress bar only on main process
     if distributed_mode.is_main_process():
-        pbar = tqdm(enumerate(data_loader), total=len(data_loader), desc=f"Epoch {epoch}")
+        pbar = tqdm(
+            enumerate(data_loader), 
+            total=len(data_loader), 
+            desc=f"Epoch {epoch}",
+            file=sys.stdout,
+            dynamic_ncols=True,
+        )
     else:
         pbar = enumerate(data_loader)
 

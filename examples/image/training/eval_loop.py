@@ -6,6 +6,7 @@
 import gc
 import logging
 import os
+import sys
 from argparse import Namespace
 from pathlib import Path
 from typing import Iterable
@@ -116,7 +117,13 @@ def eval_model(
 
     # Use tqdm progress bar only on main process
     if distributed_mode.is_main_process():
-        pbar = tqdm(enumerate(data_loader), total=len(data_loader), desc=f"Eval Epoch {epoch}")
+        pbar = tqdm(
+            enumerate(data_loader), 
+            total=len(data_loader), 
+            desc=f"Eval Epoch {epoch}",
+            file=sys.stdout,
+            dynamic_ncols=True,
+        )
     else:
         pbar = enumerate(data_loader)
 
