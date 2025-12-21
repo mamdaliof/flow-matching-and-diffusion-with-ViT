@@ -55,13 +55,13 @@ class CFGScaledModel(ModelWrapper):
         t = torch.zeros(x.shape[0], device=x.device) + t
 
         if cfg_scale != 0.0:
-            with torch.cuda.amp.autocast(), torch.no_grad():
+            with torch.amp.autocast('cuda'), torch.no_grad():
                 conditional = self.model(x, t, extra={"label": label})
                 condition_free = self.model(x, t, extra={})
             result = (1.0 + cfg_scale) * conditional - cfg_scale * condition_free
         else:
             # Model is fully conditional, no cfg weighting needed
-            with torch.cuda.amp.autocast(), torch.no_grad():
+            with torch.amp.autocast('cuda'), torch.no_grad():
                 result = self.model(x, t, extra={"label": label})
 
         self.nfe_counter += 1
