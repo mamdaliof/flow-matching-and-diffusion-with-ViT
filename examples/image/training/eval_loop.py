@@ -31,6 +31,8 @@ from training.train_loop import MASK_TOKEN
 
 logger = logging.getLogger(__name__)
 
+PRINT_FREQUENCY = 50
+
 
 class CFGScaledModel(ModelWrapper):
     def __init__(self, model: Module):
@@ -185,11 +187,6 @@ def eval_model(
                 synthetic_samples = synthetic_samples[: fid_samples - num_synthetic]
             fid_metric.update(synthetic_samples, real=False)
             num_synthetic += synthetic_samples.shape[0]
-            
-            # Update tqdm progress bar
-            if distributed_mode.is_main_process():
-                pbar.set_postfix({"samples": f"{num_synthetic}/{fid_samples}"})
-            
             if not snapshots_saved and args.output_dir:
                 save_image(
                     synthetic_samples,
@@ -220,8 +217,8 @@ def eval_model(
         if not args.compute_fid:
             return {}
 
-        # Update progress bar with running FID periodically
-        if distributed_mode.is_main_process() and data_iter_step % 50 == 0 and data_iter_step > 0:
+        # Update tqdm progress bar
+        if distributed_mode.is_main_process():
             gc.collect()
             running_fid = fid_metric.compute()
             pbar.set_postfix({"samples": f"{num_synthetic}/{fid_samples}", "fid": f"{running_fid:.2f}"})
