@@ -138,8 +138,10 @@ def main(args):
     logger.info(f"Effective batch size: {eff_batch_size}")
 
     if args.distributed:
+        # find_unused_parameters is needed for UNet with activation checkpointing, but not for DiT
+        find_unused = args.model_type == "unet"
         model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[args.gpu], find_unused_parameters=True
+            model, device_ids=[args.gpu], find_unused_parameters=find_unused
         )
         model_without_ddp = model.module
 
