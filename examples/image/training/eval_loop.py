@@ -24,13 +24,12 @@ from torch.nn.modules import Module
 from torch.nn.parallel import DistributedDataParallel
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchvision.utils import save_image
+from tqdm import tqdm
 from training import distributed_mode
 from training.edm_time_discretization import get_time_discretization
 from training.train_loop import MASK_TOKEN
 
 logger = logging.getLogger(__name__)
-
-PRINT_FREQUENCY = 50
 
 
 class CFGScaledModel(ModelWrapper):
@@ -113,7 +112,13 @@ def eval_model(
     if args.output_dir:
         (Path(args.output_dir) / "snapshots").mkdir(parents=True, exist_ok=True)
 
-    for data_iter_step, (samples, labels) in enumerate(data_loader):
+    # Use tqdm progress bar only on main process
+    if distributed_mode.is_main_process():
+        pbar = tqdm(enumerate(data_loader), total=len(data_loader), desc=f"Eval Epoch {epoch}")
+    else:
+        pbar = enumerate(data_loader)
+
+    for data_iter_step, (samples, labels) in pbar:
         samples = samples.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
         fid_metric.update(samples, real=True)
@@ -180,6 +185,11 @@ def eval_model(
                 synthetic_samples = synthetic_samples[: fid_samples - num_synthetic]
             fid_metric.update(synthetic_samples, real=False)
             num_synthetic += synthetic_samples.shape[0]
+            
+            # Update tqdm progress bar
+            if distributed_mode.is_main_process():
+                pbar.set_postfix({"samples": f"{num_synthetic}/{fid_samples}"})
+            
             if not snapshots_saved and args.output_dir:
                 save_image(
                     synthetic_samples,
@@ -210,13 +220,11 @@ def eval_model(
         if not args.compute_fid:
             return {}
 
-        if data_iter_step % PRINT_FREQUENCY == 0:
-            # Sync fid metric to ensure that the processes dont deviate much.
+        # Update progress bar with running FID periodically
+        if distributed_mode.is_main_process() and data_iter_step % 50 == 0 and data_iter_step > 0:
             gc.collect()
             running_fid = fid_metric.compute()
-            logger.info(
-                f"Evaluating [{data_iter_step}/{len(data_loader)}] samples generated [{num_synthetic}/{fid_samples}] running fid {running_fid}"
-            )
+            pbar.set_postfix({"samples": f"{num_synthetic}/{fid_samples}", "fid": f"{running_fid:.2f}"})
 
         if args.test_run:
             break
