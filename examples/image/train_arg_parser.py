@@ -225,5 +225,12 @@ def get_args_parser():
         type=int,
         help="Number of sampling steps for discrete FM.",
     )
+    parser.add_argument(
+        "--training_mode",
+        default="flow_matching",
+        type=str,
+        choices=["flow_matching", "diffusion"],
+        help="Training mode: 'flow_matching' or 'diffusion'.",
+    )
 
     return parser
