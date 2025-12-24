@@ -63,6 +63,13 @@ def init_distributed_mode(args):
 
     args.distributed = True
 
+    if 'local_rank' in args and args.local_rank is not None:
+        args.gpu = args.local_rank
+    elif hasattr(args, 'local_rank'):
+        args.gpu = args.local_rank
+    else:
+        # fallback: try to get from environment
+        args.gpu = int(os.environ.get('LOCAL_RANK', 0))
     torch.cuda.set_device(args.gpu)
     args.dist_backend = "nccl"
     print(
