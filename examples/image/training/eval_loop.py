@@ -91,20 +91,24 @@ def eval_model(
     cfg_scaled_model = CFGScaledModel(model=model)
     cfg_scaled_model.train(False)
 
-    if args.discrete_flow_matching:
-        scheduler = PolynomialConvexScheduler(n=3.0)
-        path = MixtureDiscreteProbPath(scheduler=scheduler)
-        p = torch.zeros(size=[257], dtype=torch.float32, device=device)
-        p[256] = 1.0
-        solver = MixtureDiscreteEulerSolver(
-            model=cfg_scaled_model,
-            path=path,
-            vocabulary_size=257,
-            source_distribution_p=p,
-        )
-    else:
-        solver = ODESolver(velocity_model=cfg_scaled_model)
-        ode_opts = args.ode_options
+    training_mode = getattr(args, 'training_mode', 'flow_matching')
+
+    if training_mode == 'flow_matching':
+        if args.discrete_flow_matching:
+            scheduler = PolynomialConvexScheduler(n=3.0)
+            path = MixtureDiscreteProbPath(scheduler=scheduler)
+            p = torch.zeros(size=[257], dtype=torch.float32, device=device)
+            p[256] = 1.0
+            solver = MixtureDiscreteEulerSolver(
+                model=cfg_scaled_model,
+                path=path,
+                vocabulary_size=257,
+                source_distribution_p=p,
+            )
+        else:
+            solver = ODESolver(velocity_model=cfg_scaled_model)
+            ode_opts = args.ode_options
+    # No solver needed for diffusion, as we'll implement custom sampling below
 
     fid_metric = FrechetInceptionDistance(normalize=True).to(
         device=device, non_blocking=True
@@ -134,58 +138,93 @@ def eval_model(
 
         if num_synthetic < fid_samples:
             cfg_scaled_model.reset_nfe_counter()
-            if args.discrete_flow_matching:
-                # Discrete sampling
-                x_0 = (
-                    torch.zeros(samples.shape, dtype=torch.long, device=device)
-                    + MASK_TOKEN
-                )
-                if args.sym_func:
-                    sym = lambda t: 12.0 * torch.pow(t, 2.0) * torch.pow(1.0 - t, 0.25)
+            if training_mode == 'flow_matching':
+                if args.discrete_flow_matching:
+                    # Discrete sampling
+                    x_0 = (
+                        torch.zeros(samples.shape, dtype=torch.long, device=device)
+                        + MASK_TOKEN
+                    )
+                    if args.sym_func:
+                        sym = lambda t: 12.0 * torch.pow(t, 2.0) * torch.pow(1.0 - t, 0.25)
+                    else:
+                        sym = args.sym
+                    if args.sampling_dtype == "float32":
+                        dtype = torch.float32
+                    elif args.sampling_dtype == "float64":
+                        dtype = torch.float64
+
+                    synthetic_samples = solver.sample(
+                        x_init=x_0,
+                        step_size=1.0 / args.discrete_fm_steps,
+                        verbose=False,
+                        div_free=sym,
+                        dtype_categorical=dtype,
+                        label=labels,
+                        cfg_scale=args.cfg_scale,
+                    )
                 else:
-                    sym = args.sym
-                if args.sampling_dtype == "float32":
-                    dtype = torch.float32
-                elif args.sampling_dtype == "float64":
-                    dtype = torch.float64
+                    # Continuous sampling
+                    x_0 = torch.randn(samples.shape, dtype=torch.float32, device=device)
 
-                synthetic_samples = solver.sample(
-                    x_init=x_0,
-                    step_size=1.0 / args.discrete_fm_steps,
-                    verbose=False,
-                    div_free=sym,
-                    dtype_categorical=dtype,
-                    label=labels,
-                    cfg_scale=args.cfg_scale,
-                )
-            else:
-                # Continuous sampling
-                x_0 = torch.randn(samples.shape, dtype=torch.float32, device=device)
+                    if args.edm_schedule:
+                        time_grid = get_time_discretization(nfes=ode_opts["nfe"])
+                    else:
+                        time_grid = torch.tensor([0.0, 1.0], device=device)
 
-                if args.edm_schedule:
-                    time_grid = get_time_discretization(nfes=ode_opts["nfe"])
-                else:
-                    time_grid = torch.tensor([0.0, 1.0], device=device)
+                    synthetic_samples = solver.sample(
+                        time_grid=time_grid,
+                        x_init=x_0,
+                        method=args.ode_method,
+                        return_intermediates=False,
+                        atol=ode_opts["atol"] if "atol" in ode_opts else 1e-5,
+                        rtol=ode_opts["rtol"] if "atol" in ode_opts else 1e-5,
+                        step_size=ode_opts["step_size"]
+                        if "step_size" in ode_opts
+                        else None,
+                        label=labels,
+                        cfg_scale=args.cfg_scale,
+                    )
 
-                synthetic_samples = solver.sample(
-                    time_grid=time_grid,
-                    x_init=x_0,
-                    method=args.ode_method,
-                    return_intermediates=False,
-                    atol=ode_opts["atol"] if "atol" in ode_opts else 1e-5,
-                    rtol=ode_opts["rtol"] if "atol" in ode_opts else 1e-5,
-                    step_size=ode_opts["step_size"]
-                    if "step_size" in ode_opts
-                    else None,
-                    label=labels,
-                    cfg_scale=args.cfg_scale,
-                )
-
+                    # Scaling to [0, 1] from [-1, 1]
+                    synthetic_samples = torch.clamp(
+                        synthetic_samples * 0.5 + 0.5, min=0.0, max=1.0
+                    )
+                    synthetic_samples = torch.floor(synthetic_samples * 255)
+            elif training_mode == 'diffusion':
+                # Diffusion sampling: DDPM-style reverse process with discrete timesteps
+                num_steps = 101  # Match training timesteps
+                timesteps = torch.linspace(0, 1, num_steps, device=device)
+                x_t = torch.randn(samples.shape, dtype=torch.float32, device=device)  # Start from noise at t=1
+                for i in range(num_steps - 1, 0, -1):  # From t=1 to t=0
+                    t = timesteps[i].expand(samples.shape[0])
+                    t_prev = timesteps[i - 1].expand(samples.shape[0])
+                    alpha_bar_t = 1.0 - t
+                    alpha_bar_t_prev = 1.0 - t_prev
+                    # Predict the noise added from t-1 to t
+                    with torch.amp.autocast('cuda'), torch.no_grad():
+                        pred_noise = cfg_scaled_model(x_t, t, cfg_scale=args.cfg_scale, label=labels)
+                    # Denoise: reverse the noise addition
+                    x_t = (
+                        (x_t - (1 - alpha_bar_t).sqrt().view(-1, 1, 1, 1) * pred_noise)
+                        / alpha_bar_t.sqrt().view(-1, 1, 1, 1)
+                    )
+                    # Add noise for stochasticity (except at t=0)
+                    if i > 1:
+                        noise = torch.randn_like(x_t)
+                        x_t = (
+                            alpha_bar_t_prev.sqrt().view(-1, 1, 1, 1) * x_t
+                            + (1 - alpha_bar_t_prev).sqrt().view(-1, 1, 1, 1) * noise
+                        )
+                synthetic_samples = x_t
                 # Scaling to [0, 1] from [-1, 1]
                 synthetic_samples = torch.clamp(
                     synthetic_samples * 0.5 + 0.5, min=0.0, max=1.0
                 )
                 synthetic_samples = torch.floor(synthetic_samples * 255)
+            else:
+                raise ValueError(f"Unknown training_mode: {training_mode}")
+
             synthetic_samples = synthetic_samples.to(torch.float32) / 255.0
             logger.info(
                 f"{samples.shape[0]} samples generated in {cfg_scaled_model.get_nfe()} evaluations."

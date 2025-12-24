@@ -51,11 +51,15 @@ def train_one_epoch(
     epoch_loss = MeanMetric().to(device, non_blocking=True)
 
     accum_iter = args.accum_iter
-    if args.discrete_flow_matching:
-        scheduler = PolynomialConvexScheduler(n=3.0)
-        path = MixtureDiscreteProbPath(scheduler=scheduler)
-    else:
-        path = CondOTProbPath()
+    # Add support for training_mode: 'flow_matching' (default), 'diffusion'
+    training_mode = getattr(args, 'training_mode', 'flow_matching')
+    if training_mode == 'flow_matching':
+        if args.discrete_flow_matching:
+            scheduler = PolynomialConvexScheduler(n=3.0)
+            path = MixtureDiscreteProbPath(scheduler=scheduler)
+        else:
+            path = CondOTProbPath()
+    # No path needed for diffusion
 
     # Use tqdm progress bar only on main process
     if distributed_mode.is_main_process():
@@ -84,35 +88,69 @@ def train_one_epoch(
         else:
             conditioning = {"label": labels}
 
-        if args.discrete_flow_matching:
-            samples = (samples * 255.0).to(torch.long)
-            t = torch.torch.rand(samples.shape[0]).to(device)
 
-            # sample probability path
-            x_0 = (
-                torch.zeros(samples.shape, dtype=torch.long, device=device) + MASK_TOKEN
-            )
-            path_sample = path.sample(t=t, x_0=x_0, x_1=samples)
+        if training_mode == 'flow_matching':
+            if args.discrete_flow_matching:
+                samples = (samples * 255.0).to(torch.long)
+                t = torch.torch.rand(samples.shape[0]).to(device)
 
-            # discrete flow matching loss
-            logits = model(path_sample.x_t, t=t, extra=conditioning)
-            loss = torch.nn.functional.cross_entropy(
-                logits.reshape([-1, 257]), samples.reshape([-1])
-            ).mean()
-        else:
+                # sample probability path
+                x_0 = (
+                    torch.zeros(samples.shape, dtype=torch.long, device=device) + MASK_TOKEN
+                )
+                path_sample = path.sample(t=t, x_0=x_0, x_1=samples)
+
+                # discrete flow matching loss
+                logits = model(path_sample.x_t, t=t, extra=conditioning)
+                loss = torch.nn.functional.cross_entropy(
+                    logits.reshape([-1, 257]), samples.reshape([-1])
+                ).mean()
+            else:
+                # Scaling to [-1, 1] from [0, 1]
+                samples = samples * 2.0 - 1.0
+                noise = torch.randn_like(samples).to(device)
+                if args.skewed_timesteps:
+                    t = skewed_timestep_sample(samples.shape[0], device=device)
+                else:
+                    t = torch.torch.rand(samples.shape[0]).to(device)
+                path_sample = path.sample(t=t, x_0=noise, x_1=samples)
+                x_t = path_sample.x_t
+                u_t = path_sample.dx_t
+
+                with torch.amp.autocast('cuda'):
+                    loss = torch.pow(model(x_t, t, extra=conditioning) - u_t, 2).mean()
+        elif training_mode == 'diffusion':
+            # Discrete diffusion: model predicts noise added from t-1 to t
             # Scaling to [-1, 1] from [0, 1]
             samples = samples * 2.0 - 1.0
+            batch_size = samples.shape[0]
             noise = torch.randn_like(samples).to(device)
-            if args.skewed_timesteps:
-                t = skewed_timestep_sample(samples.shape[0], device=device)
-            else:
-                t = torch.torch.rand(samples.shape[0]).to(device)
-            path_sample = path.sample(t=t, x_0=noise, x_1=samples)
-            x_t = path_sample.x_t
-            u_t = path_sample.dx_t
-
+            # Define discrete timesteps: 0, 0.01, ..., 1.0
+            num_steps = 101
+            timesteps = torch.linspace(0, 1, num_steps, device=device)
+            # For each sample, randomly pick t in {1, ..., num_steps-1} (so t-1 >= 0)
+            t_indices = torch.randint(1, num_steps, (batch_size,), device=device)
+            t = timesteps[t_indices]           # t for each sample
+            t_prev = timesteps[t_indices - 1]  # t-1 for each sample
+            # For linear schedule: alpha_bar = 1 - t
+            alpha_bar_t = 1.0 - t
+            alpha_bar_t_prev = 1.0 - t_prev
+            # Sample noise for both steps (same noise for both, as in DDPM)
+            noisy_samples_prev = (
+                alpha_bar_t_prev.sqrt().view(-1, 1, 1, 1) * samples
+                + (1 - alpha_bar_t_prev).sqrt().view(-1, 1, 1, 1) * noise
+            )
+            noisy_samples = (
+                alpha_bar_t.sqrt().view(-1, 1, 1, 1) * samples
+                + (1 - alpha_bar_t).sqrt().view(-1, 1, 1, 1) * noise
+            )
+            # The true noise added from t-1 to t is the difference
+            true_noise = noisy_samples - noisy_samples_prev
             with torch.amp.autocast('cuda'):
-                loss = torch.pow(model(x_t, t, extra=conditioning) - u_t, 2).mean()
+                pred_noise = model(noisy_samples_prev, t, extra=conditioning)
+                loss = torch.pow(pred_noise - true_noise, 2).mean()
+        else:
+            raise ValueError(f"Unknown training_mode: {training_mode}")
 
         loss_value = loss.item()
         batch_loss.update(loss)
