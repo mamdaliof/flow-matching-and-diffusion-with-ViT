@@ -230,24 +230,6 @@ def main(args):
                 args=args,
             )
             log_stats.update({f"eval_{k}": v for k, v in eval_stats.items()})
-            
-            # Save FID scores to a dedicated file for easy access
-            if args.output_dir and distributed_mode.is_main_process() and "fid" in eval_stats:
-                fid_scores_path = os.path.join(args.output_dir, "fid_scores.json")
-                # Load existing scores or create new
-                if os.path.exists(fid_scores_path):
-                    with open(fid_scores_path, "r") as f:
-                        fid_scores = json.load(f)
-                else:
-                    fid_scores = []
-                fid_scores.append({
-                    "epoch": epoch,
-                    "fid": eval_stats["fid"],
-                    "fid_samples": fid_samples,
-                })
-                with open(fid_scores_path, "w") as f:
-                    json.dump(fid_scores, f, indent=2)
-                logger.info(f"Epoch {epoch} FID: {eval_stats['fid']:.4f} (saved to {fid_scores_path})")
 
         if args.output_dir and distributed_mode.is_main_process():
             with open(
